@@ -1,0 +1,41 @@
+# Render blueprint for the API (Render → New → Blueprint → this repository).
+# Values marked `sync: false` are asked for when the blueprint is created; see backend/.env.example for each one.
+services:
+  - type: web
+    name: clovio-api
+    runtime: python
+    region: singapore  # next to the Supabase database; every request makes several queries
+    # The free plan sleeps after 15 idle minutes and then takes about a minute to wake. Use a paid plan for the pilot.
+    plan: starter
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    # One process: access tokens and calendar busy times are cached in memory (see services/oauth.py, calendars.py).
+    startCommand: python -m alembic upgrade head && python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.14.6  # the dev machine's version
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALLOW_SIGNUP
+        value: "false"
+      - key: DATABASE_URL  # Supabase → Connect → Session pooler
+        sync: false
+      - key: API_URL  # this service's https://….onrender.com address
+        sync: false
+      - key: FRONTEND_URL  # the Vercel site's https:// address
+        sync: false
+      - key: ALLOWED_ORIGINS  # the Vercel site's https:// address again
+        sync: false
+      - key: NEW_ACCOUNT_EMAILS  # the managers' emails; see .env.example
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: MICROSOFT_CLIENT_ID
+        sync: false
+      - key: MICROSOFT_CLIENT_SECRET
+        sync: false

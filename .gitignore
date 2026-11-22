@@ -1,0 +1,21 @@
+# Secrets and local state
+.env
+*.db
+.claude/
+
+# Python
+backend/venv/
+__pycache__/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+*.local
+*.log
+
+# Editors and OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store

@@ -1,0 +1,18 @@
+# Compiled packages (SQLAlchemy, pydantic-core, psycopg-binary, cryptography) are pinned to the builds Windows
+# application control already allows on the dev machine; newer builds get blocked there.
+fastapi==0.129.0
+uvicorn==0.40.0
+SQLAlchemy==2.0.48
+alembic==1.18.4
+psycopg[binary]==3.3.4
+pydantic[email]==2.12.5
+python-dotenv==1.2.1
+PyJWT==2.15.1
+# Encrypts stored calendar tokens (Fernet) and lets PyJWT check Google and Microsoft ID tokens (RS256).
+cryptography==50.0.2
+# Time zone data for zoneinfo; Windows has none of its own.
+tzdata==2026.6
+httpx==0.28.1
+pytest==9.2.0
+python-multipart==0.0.22
+pypdf==7.1.1
