@@ -137,8 +137,27 @@ def plan(jobs: list[Job], people: list[Person], today: date, horizon_days: int =
     for job in _order(jobs):
         start = max((finished_on[d] for d in job.depends_on if d in finished_on), default=0)
 
+        def _skill_matches(req: str, owned: frozenset[str]) -> bool:
+            r = req.lower().strip()
+            if not r:
+                return False
+            if r in owned:
+                return True
+            r_tokens = {w for w in r.replace("&", " ").replace("/", " ").replace("-", " ").split() if len(w) >= 2}
+            for s in owned:
+                s_low = s.lower().strip()
+                if r in s_low or s_low in r:
+                    return True
+                s_tokens = {w for w in s_low.replace("&", " ").replace("/", " ").replace("-", " ").split() if len(w) >= 2}
+                if r_tokens and (r_tokens & s_tokens):
+                    return True
+            return False
+
+        def matched_skills(person: Person) -> set[str]:
+            return {req for req in job.skills if _skill_matches(req, person.skills)}
+
         def score(person: Person) -> float:
-            return len(job.skills & person.skills) / len(job.skills) if job.skills else 1.0
+            return len(matched_skills(person)) / len(job.skills) if job.skills else 1.0
 
         if job.movable and people:
             best = max(score(p) for p in people)
@@ -168,7 +187,7 @@ def plan(jobs: list[Job], people: list[Person], today: date, horizon_days: int =
             if job.skills and best == 0:
                 why = f"No one lists {_join(job.skills)}; {person.name} can finish it soonest"
             elif job.skills:
-                why = f"Has {_join(job.skills & person.skills)}"
+                why = f"Has {_join(matched_skills(person))}"
                 if score(person) < best:
                     why += " (closer matches can't make the due date)"
             else:

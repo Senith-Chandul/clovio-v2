@@ -33,7 +33,13 @@ export default function OverviewPanel({ projectId }: { projectId: string }) {
     refetchInterval: 15_000,
   });
   if (query.isError) return <p className="text-sm text-danger-text">{errorMessage(query.error, "Couldn't load the overview.")}</p>;
-  if (!query.data) return null;
+  if (!query.data) {
+    return (
+      <section className="clv-card">
+        <p className="text-[13px] text-ink-muted">Loading overview…</p>
+      </section>
+    );
+  }
   const o = query.data;
 
   const margin = o.predicted_finish && o.deadline ? daysBetween(o.predicted_finish, o.deadline) : null;
@@ -120,7 +126,7 @@ export default function OverviewPanel({ projectId }: { projectId: string }) {
                       </div>
                     </div>
                     {p.free_hours !== null && <div className="clv-fair-line mx-2" style={{ bottom: `${(p.free_hours / scale) * 108}px` }} />}
-                    <span className="clv-bar-name max-w-[68px] truncate">{p.name.split(' ')[0]}</span>
+                    <span className="clv-bar-name max-w-[68px] truncate">{/^(dr|prof|mr|ms|mrs)\.?$/i.test(p.name.split(' ')[0]) && p.name.split(' ')[1] ? `${p.name.split(' ')[0]} ${p.name.split(' ')[1]}` : p.name.split(' ')[0]}</span>
                   </div>
                 ))}
               </div>

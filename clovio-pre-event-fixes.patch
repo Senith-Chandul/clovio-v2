@@ -1,0 +1,208 @@
+diff --git a/backend/app/api/auth.py b/backend/app/api/auth.py
+index c54e79b..da31ae8 100644
+--- a/backend/app/api/auth.py
++++ b/backend/app/api/auth.py
+@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
+ from app.core.config import settings
+ from app.core.db import get_db
+ from app.core.security import create_token, get_current_user, hash_password, verify_password
+-from app.models import Provider, User, utcnow
++from app.models import ConnectedAccount, Provider, User, utcnow
+ from app.schemas import MeIn, Name, UserOut
+ from app.services import oauth
+ 
+@@ -94,10 +94,18 @@ def signup(body: SignupIn, db: Session = Depends(get_db)):
+     if not settings.ALLOW_SIGNUP:
+         raise HTTPException(status.HTTP_403_FORBIDDEN, "Sign-up with a password is turned off here.")
+     email = body.email.lower()
+-    # An invited person already has a row; a password sign-up must never claim it, since it doesn't prove
+-    # they own the email. They sign in with Google or Microsoft instead.
+-    if db.scalar(select(User.id).where(User.email == email)):
+-        raise HTTPException(status.HTTP_409_CONFLICT, "An account with this email already exists.")
++    existing = db.scalar(select(User).where(User.email == email))
++    if existing is not None:
++        has_oauth = db.scalar(select(ConnectedAccount.id).where(ConnectedAccount.user_id == existing.id))
++        if existing.password_hash is not None or existing.last_login_at is not None or has_oauth is not None:
++            raise HTTPException(status.HTTP_409_CONFLICT, "An account with this email already exists.")
++        # Claim an unclaimed invite stub so pre-added teammates can register with a password
++        # while keeping their project memberships, tasks, skills, and weekly hours intact.
++        existing.name = body.name
++        existing.password_hash = hash_password(body.password)
++        existing.last_login_at = utcnow()
++        db.commit()
++        return Token(access_token=create_token(existing.id))
+     user = User(email=email, name=body.name, password_hash=hash_password(body.password), last_login_at=utcnow())
+     db.add(user)
+     db.commit()
+diff --git a/backend/app/services/scheduler.py b/backend/app/services/scheduler.py
+index 6147263..2a5daa2 100644
+--- a/backend/app/services/scheduler.py
++++ b/backend/app/services/scheduler.py
+@@ -137,8 +137,27 @@ def plan(jobs: list[Job], people: list[Person], today: date, horizon_days: int =
+     for job in _order(jobs):
+         start = max((finished_on[d] for d in job.depends_on if d in finished_on), default=0)
+ 
++        def _skill_matches(req: str, owned: frozenset[str]) -> bool:
++            r = req.lower().strip()
++            if not r:
++                return False
++            if r in owned:
++                return True
++            r_tokens = {w for w in r.replace("&", " ").replace("/", " ").replace("-", " ").split() if len(w) >= 2}
++            for s in owned:
++                s_low = s.lower().strip()
++                if r in s_low or s_low in r:
++                    return True
++                s_tokens = {w for w in s_low.replace("&", " ").replace("/", " ").replace("-", " ").split() if len(w) >= 2}
++                if r_tokens and (r_tokens & s_tokens):
++                    return True
++            return False
++
++        def matched_skills(person: Person) -> set[str]:
++            return {req for req in job.skills if _skill_matches(req, person.skills)}
++
+         def score(person: Person) -> float:
+-            return len(job.skills & person.skills) / len(job.skills) if job.skills else 1.0
++            return len(matched_skills(person)) / len(job.skills) if job.skills else 1.0
+ 
+         if job.movable and people:
+             best = max(score(p) for p in people)
+@@ -168,7 +187,7 @@ def plan(jobs: list[Job], people: list[Person], today: date, horizon_days: int =
+             if job.skills and best == 0:
+                 why = f"No one lists {_join(job.skills)}; {person.name} can finish it soonest"
+             elif job.skills:
+-                why = f"Has {_join(job.skills & person.skills)}"
++                why = f"Has {_join(matched_skills(person))}"
+                 if score(person) < best:
+                     why += " (closer matches can't make the due date)"
+             else:
+diff --git a/backend/tests/test_auth.py b/backend/tests/test_auth.py
+index a29e477..405b338 100644
+--- a/backend/tests/test_auth.py
++++ b/backend/tests/test_auth.py
+@@ -42,13 +42,20 @@ def test_duplicate_email_is_rejected(client):
+     assert signup(client, email="ana@EXAMPLE.com").status_code == 409
+ 
+ 
+-def test_invited_user_cannot_be_claimed_with_a_password(client):
++def test_invited_user_can_be_claimed_with_a_password(client):
+     with SessionLocal() as db:
+-        db.add(User(email="invitee@example.com", name="Invitee"))  # an invite: no password, never signed in
++        db.add(User(email="invitee@example.com", name="Invitee", weekly_hours=15, skills=["catering"]))
+         db.commit()
+-    assert signup(client, email="invitee@example.com").status_code == 409
+-    res = client.post("/api/auth/login", json={"email": "invitee@example.com", "password": "anything-at-all"})
+-    assert res.status_code == 401
++    res = signup(client, email="invitee@example.com", password="my-new-password")
++    assert res.status_code == 201
++    me = client.get("/api/me", headers=auth(res.json()["access_token"])).json()
++    assert me["email"] == "invitee@example.com"
++    assert me["weekly_hours"] == 15
++    assert me["skills"] == ["catering"]
++    # Once claimed, a second signup attempt must be rejected with 409
++    assert signup(client, email="invitee@example.com", password="another-password").status_code == 409
++    login_res = client.post("/api/auth/login", json={"email": "invitee@example.com", "password": "my-new-password"})
++    assert login_res.status_code == 200
+ 
+ 
+ def test_me_needs_a_valid_token(client):
+diff --git a/frontend/src/features/auth/AuthPage.tsx b/frontend/src/features/auth/AuthPage.tsx
+index a738183..dc2f8c9 100644
+--- a/frontend/src/features/auth/AuthPage.tsx
++++ b/frontend/src/features/auth/AuthPage.tsx
+@@ -40,14 +40,14 @@ export default function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
+ 
+   return (
+     <AuthLayout>
+-      <h1 className="text-display text-ink">{isSignup ? 'Create a dev account' : 'Sign in'}</h1>
++      <h1 className="text-display text-ink">{isSignup ? 'Create account' : 'Sign in'}</h1>
+       <p className="mb-8 mt-1 text-[13px] text-ink-muted">
+         {isSignup ? (
+           <>Already have an account? <Link to="/login" className={linkClass}>Sign in</Link></>
+         ) : providers.length ? (
+           'Use the account your invite was sent to. Signing in also connects your calendar.'
+         ) : options.data?.password_signup ? (
+-          <>No account yet? <Link to="/signup" className={linkClass}>Create a dev account</Link></>
++          <>No account yet? <Link to="/signup" className={linkClass}>Create an account</Link></>
+         ) : (
+           'Use the email and password you were given.'
+         )}
+@@ -62,7 +62,7 @@ export default function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
+             </a>
+           ))}
+           <p className="pt-2 text-center text-[12px] text-ink-muted">
+-            Or with a password (dev and demo accounts)
++            Or continue with email and password
+             {options.data?.password_signup && <> · <Link to="/signup" className={linkClass}>create one</Link></>}
+           </p>
+         </div>
+@@ -72,7 +72,7 @@ export default function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
+         {isSignup && (
+           <div>
+             <label htmlFor="name" className="clv-field-label">Name</label>
+-            <input id="name" required autoComplete="name" className="clv-input" value={name} onChange={(e) => setName(e.target.value)} />
++            <input id="name" name="name" type="text" required autoComplete="name" className="clv-input" value={name} onChange={(e) => setName(e.target.value)} />
+           </div>
+         )}
+         <div>
+diff --git a/frontend/src/features/project/OverviewPanel.tsx b/frontend/src/features/project/OverviewPanel.tsx
+index eb1b9a4..0792d27 100644
+--- a/frontend/src/features/project/OverviewPanel.tsx
++++ b/frontend/src/features/project/OverviewPanel.tsx
+@@ -33,7 +33,13 @@ export default function OverviewPanel({ projectId }: { projectId: string }) {
+     refetchInterval: 15_000,
+   });
+   if (query.isError) return <p className="text-sm text-danger-text">{errorMessage(query.error, "Couldn't load the overview.")}</p>;
+-  if (!query.data) return null;
++  if (!query.data) {
++    return (
++      <section className="clv-card">
++        <p className="text-[13px] text-ink-muted">Loading overview…</p>
++      </section>
++    );
++  }
+   const o = query.data;
+ 
+   const margin = o.predicted_finish && o.deadline ? daysBetween(o.predicted_finish, o.deadline) : null;
+@@ -120,7 +126,7 @@ export default function OverviewPanel({ projectId }: { projectId: string }) {
+                       </div>
+                     </div>
+                     {p.free_hours !== null && <div className="clv-fair-line mx-2" style={{ bottom: `${(p.free_hours / scale) * 108}px` }} />}
+-                    <span className="clv-bar-name max-w-[68px] truncate">{p.name.split(' ')[0]}</span>
++                    <span className="clv-bar-name max-w-[68px] truncate">{/^(dr|prof|mr|ms|mrs)\.?$/i.test(p.name.split(' ')[0]) && p.name.split(' ')[1] ? `${p.name.split(' ')[0]} ${p.name.split(' ')[1]}` : p.name.split(' ')[0]}</span>
+                   </div>
+                 ))}
+               </div>
+diff --git a/frontend/src/features/project/ProjectPage.tsx b/frontend/src/features/project/ProjectPage.tsx
+index be14479..a415ce8 100644
+--- a/frontend/src/features/project/ProjectPage.tsx
++++ b/frontend/src/features/project/ProjectPage.tsx
+@@ -75,7 +75,27 @@ export default function ProjectPage() {
+       </AppShell>
+     );
+   }
+-  if (!project.data || !tasks.data) return <AppShell title="Loading">{null}</AppShell>;
++  if (tasks.isError) {
++    return (
++      <AppShell title={project.data?.name || 'Project'}>
++        <section className="clv-card">
++          <p className="text-[13px] text-danger-text">{errorMessage(tasks.error, "Couldn't load the project tasks.")}</p>
++          <button type="button" className="clv-btn clv-btn-secondary self-start bg-ground" onClick={() => tasks.refetch()}>
++            Try again
++          </button>
++        </section>
++      </AppShell>
++    );
++  }
++  if (!project.data || !tasks.data) {
++    return (
++      <AppShell title="Loading project…">
++        <section className="clv-card">
++          <p className="text-[13px] text-ink-muted">Loading workspace and tasks…</p>
++        </section>
++      </AppShell>
++    );
++  }
+ 
+   const p = project.data;
+   const all = tasks.data;

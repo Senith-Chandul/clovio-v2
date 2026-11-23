@@ -40,14 +40,14 @@ export default function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
 
   return (
     <AuthLayout>
-      <h1 className="text-display text-ink">{isSignup ? 'Create a dev account' : 'Sign in'}</h1>
+      <h1 className="text-display text-ink">{isSignup ? 'Create account' : 'Sign in'}</h1>
       <p className="mb-8 mt-1 text-[13px] text-ink-muted">
         {isSignup ? (
           <>Already have an account? <Link to="/login" className={linkClass}>Sign in</Link></>
         ) : providers.length ? (
           'Use the account your invite was sent to. Signing in also connects your calendar.'
         ) : options.data?.password_signup ? (
-          <>No account yet? <Link to="/signup" className={linkClass}>Create a dev account</Link></>
+          <>No account yet? <Link to="/signup" className={linkClass}>Create an account</Link></>
         ) : (
           'Use the email and password you were given.'
         )}
@@ -62,7 +62,7 @@ export default function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
             </a>
           ))}
           <p className="pt-2 text-center text-[12px] text-ink-muted">
-            Or with a password (dev and demo accounts)
+            Or continue with email and password
             {options.data?.password_signup && <> · <Link to="/signup" className={linkClass}>create one</Link></>}
           </p>
         </div>
@@ -72,7 +72,7 @@ export default function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
         {isSignup && (
           <div>
             <label htmlFor="name" className="clv-field-label">Name</label>
-            <input id="name" required autoComplete="name" className="clv-input" value={name} onChange={(e) => setName(e.target.value)} />
+            <input id="name" name="name" type="text" required autoComplete="name" className="clv-input" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
         )}
         <div>

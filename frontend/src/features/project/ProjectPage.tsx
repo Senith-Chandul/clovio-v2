@@ -75,7 +75,27 @@ export default function ProjectPage() {
       </AppShell>
     );
   }
-  if (!project.data || !tasks.data) return <AppShell title="Loading">{null}</AppShell>;
+  if (tasks.isError) {
+    return (
+      <AppShell title={project.data?.name || 'Project'}>
+        <section className="clv-card">
+          <p className="text-[13px] text-danger-text">{errorMessage(tasks.error, "Couldn't load the project tasks.")}</p>
+          <button type="button" className="clv-btn clv-btn-secondary self-start bg-ground" onClick={() => tasks.refetch()}>
+            Try again
+          </button>
+        </section>
+      </AppShell>
+    );
+  }
+  if (!project.data || !tasks.data) {
+    return (
+      <AppShell title="Loading project…">
+        <section className="clv-card">
+          <p className="text-[13px] text-ink-muted">Loading workspace and tasks…</p>
+        </section>
+      </AppShell>
+    );
+  }
 
   const p = project.data;
   const all = tasks.data;

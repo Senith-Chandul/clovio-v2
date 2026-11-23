@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.db import get_db
 from app.core.security import create_token, get_current_user, hash_password, verify_password
-from app.models import Provider, User, utcnow
+from app.models import ConnectedAccount, Provider, User, utcnow
 from app.schemas import MeIn, Name, UserOut
 from app.services import oauth
 
@@ -94,10 +94,18 @@ def signup(body: SignupIn, db: Session = Depends(get_db)):
     if not settings.ALLOW_SIGNUP:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Sign-up with a password is turned off here.")
     email = body.email.lower()
-    # An invited person already has a row; a password sign-up must never claim it, since it doesn't prove
-    # they own the email. They sign in with Google or Microsoft instead.
-    if db.scalar(select(User.id).where(User.email == email)):
-        raise HTTPException(status.HTTP_409_CONFLICT, "An account with this email already exists.")
+    existing = db.scalar(select(User).where(User.email == email))
+    if existing is not None:
+        has_oauth = db.scalar(select(ConnectedAccount.id).where(ConnectedAccount.user_id == existing.id))
+        if existing.password_hash is not None or existing.last_login_at is not None or has_oauth is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "An account with this email already exists.")
+        # Claim an unclaimed invite stub so pre-added teammates can register with a password
+        # while keeping their project memberships, tasks, skills, and weekly hours intact.
+        existing.name = body.name
+        existing.password_hash = hash_password(body.password)
+        existing.last_login_at = utcnow()
+        db.commit()
+        return Token(access_token=create_token(existing.id))
     user = User(email=email, name=body.name, password_hash=hash_password(body.password), last_login_at=utcnow())
     db.add(user)
     db.commit()

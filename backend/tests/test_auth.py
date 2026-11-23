@@ -42,13 +42,20 @@ def test_duplicate_email_is_rejected(client):
     assert signup(client, email="ana@EXAMPLE.com").status_code == 409
 
 
-def test_invited_user_cannot_be_claimed_with_a_password(client):
+def test_invited_user_can_be_claimed_with_a_password(client):
     with SessionLocal() as db:
-        db.add(User(email="invitee@example.com", name="Invitee"))  # an invite: no password, never signed in
+        db.add(User(email="invitee@example.com", name="Invitee", weekly_hours=15, skills=["catering"]))
         db.commit()
-    assert signup(client, email="invitee@example.com").status_code == 409
-    res = client.post("/api/auth/login", json={"email": "invitee@example.com", "password": "anything-at-all"})
-    assert res.status_code == 401
+    res = signup(client, email="invitee@example.com", password="my-new-password")
+    assert res.status_code == 201
+    me = client.get("/api/me", headers=auth(res.json()["access_token"])).json()
+    assert me["email"] == "invitee@example.com"
+    assert me["weekly_hours"] == 15
+    assert me["skills"] == ["catering"]
+    # Once claimed, a second signup attempt must be rejected with 409
+    assert signup(client, email="invitee@example.com", password="another-password").status_code == 409
+    login_res = client.post("/api/auth/login", json={"email": "invitee@example.com", "password": "my-new-password"})
+    assert login_res.status_code == 200
 
 
 def test_me_needs_a_valid_token(client):
