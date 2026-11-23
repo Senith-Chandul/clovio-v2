@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 from sqlalchemy import JSON, DateTime, MetaData, TypeDecorator, create_engine, event
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.core.config import settings
@@ -11,8 +12,9 @@ engine = create_engine(
     settings.DATABASE_URL,
     # FastAPI runs plain-def routes in a thread pool; SQLite refuses cross-thread use by default.
     connect_args={"check_same_thread": False} if is_sqlite else {},
-    # The Supabase pooler drops idle connections; test each one before use.
-    pool_pre_ping=not is_sqlite,
+    # Supabase already pools connections server-side; NullPool releases each connection immediately
+    # after the request finishes so bursts of concurrent users never exhaust MaxClientsInSessionMode.
+    **({} if is_sqlite else {"poolclass": NullPool}),
 )
 
 if is_sqlite:
